@@ -40,8 +40,3 @@ func Classify(path string) (Category, error) {
 		return CategorySkip, nil
 	}
 }
-
-// classifyM4A is implemented in mp4.go (Task 3).
-func classifyM4A(path string) (Category, error) {
-	return CategorySkip, nil
-}
