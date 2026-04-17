@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ianchesal/itunes-detangler/classifier"
 )
@@ -53,7 +54,15 @@ func TestScanClassifiesFiles(t *testing.T) {
 	}
 }
 
-func TestScanCancellationDoesNotHang(t *testing.T) {
+func TestScanMissingRootReturnsError(t *testing.T) {
+	s := &Scanner{Workers: 2, Cache: nil}
+	_, err := s.Scan(context.Background(), "/does/not/exist")
+	if err == nil {
+		t.Error("expected error for non-existent root, got nil")
+	}
+}
+
+func TestScanPreCancelDoesNotHang(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 100; i++ {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("track%03d.mp3", i)), []byte{}, 0644)
@@ -68,4 +77,35 @@ func TestScanCancellationDoesNotHang(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 	for range results {} // must not hang
+}
+
+func TestScanMidCancelDoesNotHang(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 500; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("track%03d.mp3", i)), []byte{}, 0644)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	s := &Scanner{Workers: 2, Cache: nil}
+	results, err := s.Scan(ctx, dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	// Cancel after receiving the first result, while the scan is still in flight.
+	// The channel must drain without hanging regardless of how many results remain.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range results {
+			cancel()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scan did not drain after mid-scan cancellation")
+	}
 }

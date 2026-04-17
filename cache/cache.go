@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 
 	_ "modernc.org/sqlite"
 
@@ -29,10 +28,9 @@ type Entry struct {
 }
 
 // Cache is a SQLite-backed store for file classification results.
-// Upsert and Reset are protected by a mutex for safe concurrent use.
+// *sql.DB handles concurrent access internally; no additional locking is needed.
 type Cache struct {
 	db *sql.DB
-	mu sync.Mutex
 }
 
 // Open opens (or creates) the SQLite database at path.
@@ -73,8 +71,6 @@ func (c *Cache) Lookup(path string, mtime, size int64) (classifier.Category, boo
 
 // Upsert inserts or replaces a cache entry.
 func (c *Cache) Upsert(e Entry) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	_, err := c.db.Exec(
 		`INSERT OR REPLACE INTO scan_cache (path, mtime, size, category) VALUES (?, ?, ?, ?)`,
 		e.Path, e.Mtime, e.Size, int(e.Category),
@@ -84,8 +80,6 @@ func (c *Cache) Upsert(e Entry) error {
 
 // Reset removes all entries from the cache.
 func (c *Cache) Reset() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	_, err := c.db.Exec(`DELETE FROM scan_cache`)
 	return err
 }

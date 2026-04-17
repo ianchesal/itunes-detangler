@@ -71,6 +71,7 @@ func main() {
 	for result := range results {
 		if result.Err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", result.Path, result.Err)
+			rep.RecordError()
 			continue
 		}
 		rep.Record(result)

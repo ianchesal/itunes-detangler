@@ -28,7 +28,12 @@ type Scanner struct {
 
 // Scan walks root and sends one Result per file to the returned channel.
 // The channel is closed when all files are processed or ctx is cancelled.
+// Returns an error immediately if root does not exist or is inaccessible.
 func (s *Scanner) Scan(ctx context.Context, root string) (<-chan Result, error) {
+	if _, err := os.Stat(root); err != nil {
+		return nil, err
+	}
+
 	results := make(chan Result, s.Workers*4)
 
 	go func() {
@@ -53,7 +58,18 @@ func (s *Scanner) Scan(ctx context.Context, root string) (<-chan Result, error) 
 		}
 
 		fs.WalkDir(os.DirFS(root), ".", func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
+				// Surface subdirectory access errors so the caller can warn the user.
+				if path != "." {
+					select {
+					case results <- Result{Path: filepath.Join(root, path), Err: err}:
+					case <-ctx.Done():
+						return fs.SkipAll
+					}
+				}
+				return nil
+			}
+			if d.IsDir() {
 				return nil
 			}
 			select {
@@ -65,10 +81,14 @@ func (s *Scanner) Scan(ctx context.Context, root string) (<-chan Result, error) 
 			if err != nil {
 				return nil
 			}
-			work <- fileInfo{
+			select {
+			case work <- fileInfo{
 				path:  filepath.Join(root, path),
 				mtime: info.ModTime().Unix(),
 				size:  info.Size(),
+			}:
+			case <-ctx.Done():
+				return fs.SkipAll
 			}
 			return nil
 		})
@@ -97,7 +117,9 @@ func (s *Scanner) classify(fi fileInfo) (classifier.Category, error) {
 		return classifier.CategorySkip, err
 	}
 	if s.Cache != nil {
-		s.Cache.Upsert(cache.Entry{Path: fi.path, Mtime: fi.mtime, Size: fi.size, Category: cat})
+		// Cache write failure is non-fatal: the file was classified correctly.
+		// A miss on the next run just re-classifies at the cost of performance.
+		_ = s.Cache.Upsert(cache.Entry{Path: fi.path, Mtime: fi.mtime, Size: fi.size, Category: cat})
 	}
 	return cat, nil
 }

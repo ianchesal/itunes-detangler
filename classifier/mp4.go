@@ -28,6 +28,9 @@ func readBoxHeader(r io.Reader) (boxHeader, error) {
 // findBox scans for a box of the given type within limit bytes of the current
 // reader position. On success r is positioned at the start of that box's content.
 // Returns the content size (box size minus the 8-byte header).
+// Note: ISO base media allows size==1 (64-bit largesize follows) and size==0
+// (box extends to EOF). Neither appears at moov/stsd level in iTunes files,
+// so both are treated as errBoxNotFound via the size < 8 guard.
 func findBox(r io.ReadSeeker, target string, limit int64) (int64, error) {
 	var consumed int64
 	for consumed < limit {

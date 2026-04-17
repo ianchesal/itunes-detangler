@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/schollz/progressbar/v3"
 
@@ -19,6 +20,7 @@ type Stats struct {
 	DRMFree      int
 	DRMProtected int
 	Skipped      int
+	Errors       int
 }
 
 // Config configures a Reporter.
@@ -38,6 +40,7 @@ type Reporter struct {
 	freeFile   *os.File
 	protFile   *os.File
 	stats      Stats
+	writeErr   error // first write error encountered; returned by Finish
 }
 
 // New creates a Reporter. In non-dry-run mode, output files are created immediately.
@@ -56,6 +59,9 @@ func New(cfg Config) (*Reporter, error) {
 		return r, nil
 	}
 
+	if err := os.MkdirAll(cfg.OutDir, 0755); err != nil {
+		return nil, err
+	}
 	freeFile, err := os.Create(filepath.Join(cfg.OutDir, "drm-free.txt"))
 	if err != nil {
 		return nil, err
@@ -79,45 +85,58 @@ func (r *Reporter) Record(result scanner.Result) {
 
 	rel, err := filepath.Rel(r.cfg.SrcPath, result.Path)
 	if err != nil {
-		rel = result.Path
+		// Can't make path relative to SrcPath — writing an absolute path would
+		// silently produce wrong rsync behaviour, so skip it.
+		r.stats.Skipped++
+		return
 	}
 
 	switch result.Category {
 	case classifier.CategoryDRMFree:
 		r.stats.DRMFree++
-		fmt.Fprintln(r.freeWriter, rel)
+		if _, err := fmt.Fprintln(r.freeWriter, rel); err != nil && r.writeErr == nil {
+			r.writeErr = err
+		}
 	case classifier.CategoryDRMProtected:
 		r.stats.DRMProtected++
-		fmt.Fprintln(r.protWriter, rel)
+		if _, err := fmt.Fprintln(r.protWriter, rel); err != nil && r.writeErr == nil {
+			r.writeErr = err
+		}
 	default:
 		r.stats.Skipped++
 	}
 }
 
+// RecordError counts a scan result that could not be classified due to an error.
+func (r *Reporter) RecordError() {
+	r.stats.Errors++
+}
+
 // Finish flushes output, prints the summary and rsync command, and returns stats.
 func (r *Reporter) Finish() (Stats, error) {
 	if fw, ok := r.freeWriter.(*bufio.Writer); ok {
-		if err := fw.Flush(); err != nil {
-			return r.stats, err
+		if err := fw.Flush(); err != nil && r.writeErr == nil {
+			r.writeErr = err
 		}
 	}
 	if pw, ok := r.protWriter.(*bufio.Writer); ok {
-		if err := pw.Flush(); err != nil {
-			return r.stats, err
+		if err := pw.Flush(); err != nil && r.writeErr == nil {
+			r.writeErr = err
 		}
 	}
 	r.closeFiles()
 	r.bar.Finish()
 
-	fmt.Printf("\nScan complete: %d files | %d owned | %d DRM-protected | %d skipped\n",
-		r.stats.Total, r.stats.DRMFree, r.stats.DRMProtected, r.stats.Skipped)
+	fmt.Printf("\nScan complete: %d files | %d owned | %d DRM-protected | %d skipped | %d errors\n",
+		r.stats.Total, r.stats.DRMFree, r.stats.DRMProtected, r.stats.Skipped, r.stats.Errors)
 
 	if !r.cfg.DryRun {
 		freePath, _ := filepath.Abs(filepath.Join(r.cfg.OutDir, "drm-free.txt"))
-		fmt.Printf("\nrsync -av --files-from=%s %s %s\n", freePath, r.cfg.SrcPath, r.cfg.DestPath)
+		fmt.Printf("\nrsync -av --files-from=%s %s %s\n",
+			shellQuote(freePath), shellQuote(r.cfg.SrcPath), shellQuote(r.cfg.DestPath))
 	}
 
-	return r.stats, nil
+	return r.stats, r.writeErr
 }
 
 // Close releases any open file handles. Safe to call after Finish.
@@ -134,4 +153,9 @@ func (r *Reporter) closeFiles() {
 		r.protFile.Close()
 		r.protFile = nil
 	}
+}
+
+// shellQuote wraps s in single quotes, escaping any single quotes within.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
