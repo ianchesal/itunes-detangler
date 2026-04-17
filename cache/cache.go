@@ -2,6 +2,7 @@ package cache
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -61,7 +62,7 @@ func (c *Cache) Lookup(path string, mtime, size int64) (classifier.Category, boo
 		`SELECT category FROM scan_cache WHERE path = ? AND mtime = ? AND size = ?`,
 		path, mtime, size,
 	).Scan(&cat)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	if err != nil {

@@ -35,6 +35,9 @@ func findBox(r io.ReadSeeker, target string, limit int64) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+		if h.size < 8 {
+			return 0, errBoxNotFound
+		}
 		consumed += int64(h.size)
 		if h.boxType == target {
 			return int64(h.size) - 8, nil
