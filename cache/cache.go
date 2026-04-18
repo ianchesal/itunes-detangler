@@ -28,7 +28,6 @@ type Entry struct {
 }
 
 // Cache is a SQLite-backed store for file classification results.
-// *sql.DB handles concurrent access internally; no additional locking is needed.
 type Cache struct {
 	db *sql.DB
 }
@@ -45,6 +44,8 @@ func Open(path string) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Single connection prevents SQLITE_BUSY under concurrent writes from worker goroutines.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err

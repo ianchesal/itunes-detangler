@@ -17,6 +17,13 @@ import (
 const version = "0.1.0"
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	srcPath := flag.String("path", "/Fatboy/Musc/iTunes", "Source iTunes library path")
 	destPath := flag.String("dest", "/Volumes/media/Sorted/Unsorted/iTunes", "rsync destination path")
 	outDir := flag.String("out", ".", "Directory to write output files")
@@ -29,20 +36,18 @@ func main() {
 
 	if *showVer {
 		fmt.Printf("itunes-detangler %s\n", version)
-		return
+		return nil
 	}
 
 	c, err := cache.Open(*cachePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to open cache: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to open cache: %w", err)
 	}
 	defer c.Close()
 
 	if *reset {
 		if err := c.Reset(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: failed to reset cache: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("failed to reset cache: %w", err)
 		}
 	}
 
@@ -53,8 +58,7 @@ func main() {
 		DryRun:   *dryRun,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to create reporter: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to create reporter: %w", err)
 	}
 	defer rep.Close()
 
@@ -64,8 +68,7 @@ func main() {
 	s := &scanner.Scanner{Workers: *workers, Cache: c}
 	results, err := s.Scan(ctx, *srcPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: scan failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("scan failed: %w", err)
 	}
 
 	for result := range results {
@@ -78,9 +81,9 @@ func main() {
 	}
 
 	if _, err := rep.Finish(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to finalize output: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to finalize output: %w", err)
 	}
+	return nil
 }
 
 func defaultCachePath() string {

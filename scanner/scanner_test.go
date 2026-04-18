@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianchesal/itunes-detangler/cache"
 	"github.com/ianchesal/itunes-detangler/classifier"
 )
 
@@ -77,6 +78,55 @@ func TestScanPreCancelDoesNotHang(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 	for range results {} // must not hang
+}
+
+func TestScanCacheHitSkipsClassify(t *testing.T) {
+	dir := t.TempDir()
+	// A .xyz file has no classifier — Classify returns CategorySkip.
+	// Pre-seed the cache with CategoryDRMFree so we can verify the cache is used.
+	filePath := filepath.Join(dir, "track.xyz")
+	if err := os.WriteFile(filePath, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := cache.Open(":memory:")
+	if err != nil {
+		t.Fatalf("cache.Open: %v", err)
+	}
+	defer c.Close()
+
+	if err := c.Upsert(cache.Entry{
+		Path:     filePath,
+		Mtime:    info.ModTime().Unix(),
+		Size:     info.Size(),
+		Category: classifier.CategoryDRMFree,
+	}); err != nil {
+		t.Fatalf("cache.Upsert: %v", err)
+	}
+
+	s := &Scanner{Workers: 1, Cache: c}
+	results, err := s.Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	var got []Result
+	for r := range results {
+		got = append(got, r)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(got))
+	}
+	if got[0].Err != nil {
+		t.Fatalf("unexpected error: %v", got[0].Err)
+	}
+	if got[0].Category != classifier.CategoryDRMFree {
+		t.Errorf("got category %v, want CategoryDRMFree (cache hit)", got[0].Category)
+	}
 }
 
 func TestScanMidCancelDoesNotHang(t *testing.T) {

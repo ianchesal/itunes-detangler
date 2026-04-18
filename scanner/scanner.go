@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -30,6 +31,9 @@ type Scanner struct {
 // The channel is closed when all files are processed or ctx is cancelled.
 // Returns an error immediately if root does not exist or is inaccessible.
 func (s *Scanner) Scan(ctx context.Context, root string) (<-chan Result, error) {
+	if s.Workers < 1 {
+		return nil, fmt.Errorf("workers must be >= 1, got %d", s.Workers)
+	}
 	if _, err := os.Stat(root); err != nil {
 		return nil, err
 	}
@@ -79,6 +83,11 @@ func (s *Scanner) Scan(ctx context.Context, root string) (<-chan Result, error) 
 			}
 			info, err := d.Info()
 			if err != nil {
+				select {
+				case results <- Result{Path: filepath.Join(root, path), Err: err}:
+				case <-ctx.Done():
+					return fs.SkipAll
+				}
 				return nil
 			}
 			select {
