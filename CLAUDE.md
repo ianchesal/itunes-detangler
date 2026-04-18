@@ -4,7 +4,7 @@ A macOS CLI tool in Go that scans an iTunes/Music.app library, identifies DRM-fr
 
 ## Project Status
 
-**v0.1.0 implemented on branch `feat/implement`. Pending merge to main.**
+**v0.1.0 implemented and merged to main.**
 
 - Spec: `docs/superpowers/specs/2026-04-17-itunes-detangler-design.md`
 - Plan: `docs/superpowers/plans/2026-04-17-itunes-detangler.md`
