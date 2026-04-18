@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/schollz/progressbar/v3"
@@ -21,6 +22,12 @@ type Stats struct {
 	DRMProtected int
 	Skipped      int
 	Errors       int
+	MixedDRMDirs int
+}
+
+type dirFlags struct {
+	hasFree bool
+	hasProt bool
 }
 
 // Config configures a Reporter.
@@ -40,6 +47,7 @@ type Reporter struct {
 	freeFile   *os.File
 	protFile   *os.File
 	stats      Stats
+	dirState   map[string]*dirFlags
 	writeErr   error // first write error encountered; returned by Finish
 }
 
@@ -51,7 +59,7 @@ func New(cfg Config) (*Reporter, error) {
 		progressbar.OptionSetWidth(40),
 		progressbar.OptionClearOnFinish(),
 	)
-	r := &Reporter{cfg: cfg, bar: bar}
+	r := &Reporter{cfg: cfg, bar: bar, dirState: make(map[string]*dirFlags)}
 
 	if cfg.DryRun {
 		r.freeWriter = io.Discard
@@ -91,19 +99,36 @@ func (r *Reporter) Record(result scanner.Result) {
 		return
 	}
 
+	dir := filepath.Dir(rel)
 	switch result.Category {
 	case classifier.CategoryDRMFree:
 		r.stats.DRMFree++
 		if _, err := fmt.Fprintln(r.freeWriter, rel); err != nil && r.writeErr == nil {
 			r.writeErr = err
 		}
+		r.markDir(dir, true, false)
 	case classifier.CategoryDRMProtected:
 		r.stats.DRMProtected++
 		if _, err := fmt.Fprintln(r.protWriter, rel); err != nil && r.writeErr == nil {
 			r.writeErr = err
 		}
+		r.markDir(dir, false, true)
 	default:
 		r.stats.Skipped++
+	}
+}
+
+func (r *Reporter) markDir(dir string, free, prot bool) {
+	f := r.dirState[dir]
+	if f == nil {
+		f = &dirFlags{}
+		r.dirState[dir] = f
+	}
+	if free {
+		f.hasFree = true
+	}
+	if prot {
+		f.hasProt = true
 	}
 }
 
@@ -127,10 +152,51 @@ func (r *Reporter) Finish() (Stats, error) {
 	r.closeFiles()
 	r.bar.Finish()
 
+	// Collect mixed-DRM directories.
+	var mixed []string
+	for d, f := range r.dirState {
+		if f.hasFree && f.hasProt {
+			mixed = append(mixed, d)
+		}
+	}
+	sort.Strings(mixed)
+	r.stats.MixedDRMDirs = len(mixed)
+
 	fmt.Printf("\nScan complete: %d files | %d owned | %d DRM-protected | %d skipped | %d errors\n",
 		r.stats.Total, r.stats.DRMFree, r.stats.DRMProtected, r.stats.Skipped, r.stats.Errors)
 
+	if len(mixed) > 0 {
+		noun := "directories"
+		if len(mixed) == 1 {
+			noun = "directory"
+		}
+		fmt.Printf("\nAnomalies: %d mixed-DRM %s\n", len(mixed), noun)
+		for _, d := range mixed {
+			fmt.Printf("  %s\n", d)
+		}
+	}
+
 	if !r.cfg.DryRun {
+		// Write anomalies.txt — always, even if empty, for predictability.
+		anomPath := filepath.Join(r.cfg.OutDir, "anomalies.txt")
+		af, err := os.Create(anomPath)
+		if err != nil && r.writeErr == nil {
+			r.writeErr = err
+		} else if err == nil {
+			aw := bufio.NewWriter(af)
+			for _, d := range mixed {
+				if _, werr := fmt.Fprintln(aw, d); werr != nil && r.writeErr == nil {
+					r.writeErr = werr
+				}
+			}
+			if ferr := aw.Flush(); ferr != nil && r.writeErr == nil {
+				r.writeErr = ferr
+			}
+			if cerr := af.Close(); cerr != nil && r.writeErr == nil {
+				r.writeErr = cerr
+			}
+		}
+
 		freePath, _ := filepath.Abs(filepath.Join(r.cfg.OutDir, "drm-free.txt"))
 		fmt.Printf("\nrsync -av --files-from=%s %s %s\n",
 			shellQuote(freePath), shellQuote(r.cfg.SrcPath), shellQuote(r.cfg.DestPath))
